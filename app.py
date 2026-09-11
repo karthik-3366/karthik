@@ -5,9 +5,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import streamlit as st
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse
 from PIL import Image
 
 try:
@@ -24,17 +24,6 @@ load_dotenv()
 app = FastAPI(title="Universal Bridge")
 
 
-@app.get("/")
-def root():
-    return {
-        "status": "ok",
-        "message": "Universal Bridge is ready. Use the Streamlit UI locally or call the API endpoint for integration.",
-    }
-
-
-st.set_page_config(page_title="Universal Bridge", page_icon="🌉", layout="wide")
-
-
 def get_model_name() -> str:
     return "gemini-1.5-flash"
 
@@ -43,13 +32,10 @@ def normalize_text(value: str | None) -> str:
     return (value or "").strip()
 
 
-def parse_uploaded_file(file_obj) -> dict[str, Any]:
-    if file_obj is None:
-        return {}
-
-    file_bytes = file_obj.read()
-    file_name = file_obj.name
-    file_type = file_obj.type or ""
+def make_attachment(uploaded_file: UploadFile) -> dict[str, Any]:
+    file_bytes = uploaded_file.file.read()
+    file_name = uploaded_file.filename or "attachment"
+    file_type = uploaded_file.content_type or ""
 
     if file_type.startswith("image/"):
         return {
@@ -155,9 +141,7 @@ Rules:
                 inputs.append(Path(temp_path))
             else:
                 text_value = attachment.get("text", "")
-                inputs.append(
-                    f"\n--- Attachment: {name} ---\n{text_value[:8000]}\n"
-                )
+                inputs.append(f"\n--- Attachment: {name} ---\n{text_value[:8000]}\n")
 
         response = model.generate_content(inputs)
         raw_text = response.text
@@ -172,93 +156,261 @@ Rules:
     return clean_json_response(raw_text)
 
 
-st.title("🌉 Universal Bridge")
-st.caption("Turn messy real-world inputs into structured, verified, and actionable results using Gemini.")
+UI_HTML = """
+<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"UTF-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
+  <title>Universal Bridge</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #dbe3ee;
+      --primary: #3b82f6;
+      --primary-dark: #1f5fcd;
+      --success: #16a34a;
+      --danger: #dc2626;
+      --shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+    }
 
-st.markdown(
-    """
-    This demo illustrates a practical societal benefit: combining messy real-world inputs such as voice notes, scanned records, weather/news feeds, and images into a structured emergency or dispatch payload.
-    """
-)
+    * { box-sizing: border-box; }
 
-with st.sidebar:
-    st.header("Configuration")
-    st.write("Set your GEMINI_API_KEY in a .env file or environment variables before running.")
-    st.code("GEMINI_API_KEY=your_api_key_here")
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: linear-gradient(135deg, #edf4ff 0%, #f8fafc 100%);
+      color: var(--text);
+    }
 
-    st.header("Scenario")
-    use_case = st.selectbox(
-        "Choose the use case",
-        [
-            "Emergency Medical Triage",
-            "Disaster Relief & Traffic Rerouting",
-            "Custom Multi-Modal Input",
-        ],
-    )
+    .container {
+      max-width: 1200px;
+      margin: 32px auto;
+      padding: 24px;
+    }
 
-    st.header("Input mode")
-    input_mode = st.radio("Preferred input type", ["Text + Files", "Voice note"])
+    .header {
+      margin-bottom: 20px;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: clamp(2rem, 3vw, 3rem);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header p {
+      color: var(--muted);
+      margin-top: 10px;
+      font-size: 1.05rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 24px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 24px;
+    }
+
+    label {
+      display: block;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    select,
+    textarea,
+    input[type=\"file\"] {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 1rem;
+      background: #fff;
+      color: var(--text);
+      margin-bottom: 18px;
+    }
+
+    textarea {
+      min-height: 180px;
+      resize: vertical;
+    }
+
+    button {
+      border: none;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+      color: white;
+      border-radius: 12px;
+      padding: 13px 18px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.15s ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+
+    .status {
+      margin-top: 18px;
+      min-height: 24px;
+      font-size: 0.95rem;
+      color: var(--muted);
+    }
+
+    .status.error { color: var(--danger); }
+    .status.success { color: var(--success); }
+
+    .result-box {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 300px;
+      overflow: auto;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    .example-list {
+      margin-top: 18px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .example-item {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: var(--muted);
+    }
+
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      .container { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class=\"container\">
+    <div class=\"header\">
+      <h1>?? Universal Bridge</h1>
+      <p>Turn messy human input into structured, verified, and actionable results using Gemini.</p>
+    </div>
+
+    <div class=\"grid\">
+      <div class=\"panel\">
+        <form id=\"bridgeForm\" enctype=\"multipart/form-data\">
+          <label for=\"useCase\">Use case</label>
+          <select id=\"useCase\" name=\"use_case\">
+            <option>Emergency Medical Triage</option>
+            <option>Disaster Relief &amp; Traffic Rerouting</option>
+            <option>Custom Multi-Modal Input</option>
+          </select>
+
+          <label for=\"scenarioText\">Describe the situation</label>
+          <textarea id=\"scenarioText\" name=\"scenario_text\" placeholder=\"Example: A man was found unconscious, has difficulty breathing, and is carrying a handwritten medication list plus a photo of a damaged ankle.\"></textarea>
+
+          <label for=\"attachments\">Upload images, text records, or audio notes</label>
+          <input id=\"attachments\" name=\"files\" type=\"file\" multiple accept=\"image/*,audio/*,.txt,.json,.md\" />
+
+          <button type=\"submit\">Run Universal Bridge</button>
+        </form>
+
+        <div id=\"status\" class=\"status\"></div>
+      </div>
+
+      <div class=\"panel\">
+        <h2 style=\"margin-top:0;\">Structured Output</h2>
+        <div id=\"result\" class=\"result-box\">Waiting for input...</div>
+
+        <div class=\"example-list\">
+          <div class=\"example-item\"><strong>Emergency triage:</strong> handwritten medical records + voice note + symptoms</div>
+          <div class=\"example-item\"><strong>Disaster relief:</strong> weather alerts + road photos + incident descriptions</div>
+          <div class=\"example-item\"><strong>Dispatch payload:</strong> structured summary, urgency, and next steps</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('bridgeForm');
+    const status = document.getElementById('status');
+    const result = document.getElementById('result');
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      status.textContent = 'Processing...';
+      status.className = 'status';
+      result.textContent = 'Working on your input...';
+
+      const formData = new FormData(form);
+
+      try {
+        const response = await fetch('/api/process', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || 'Processing failed.');
+        }
+
+        result.textContent = JSON.stringify(data, null, 2);
+        status.textContent = 'Processing completed successfully.';
+        status.className = 'status success';
+      } catch (error) {
+        result.textContent = JSON.stringify({ error: error.message }, null, 2);
+        status.textContent = error.message;
+        status.className = 'status error';
+      }
+    });
+  </script>
+</body>
+</html>
+"""
 
 
-if genai is None:
-    st.error(
-        "The google-generativeai package is not available. Install the dependencies first: `pip install -r requirements.txt`."
-    )
-    st.stop()
+@app.get("/", response_class=HTMLResponse)
+async def root() -> HTMLResponse:
+    return HTMLResponse(content=UI_HTML)
 
 
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("Raw Inputs")
-    scenario_text = st.text_area(
-        "Describe the situation",
-        height=180,
-        placeholder="Example: A man was found unconscious, has difficulty breathing, and is carrying a handwritten medication list plus a photo of a damaged ankle.",
-    )
-
-    uploaded_files = st.file_uploader(
-        "Upload images, scans, text records, or audio notes",
-        accept_multiple_files=True,
-    )
-
-    if input_mode == "Voice note":
-        voice_note = st.file_uploader("Upload a voice note", type=["wav", "mp3", "m4a", "ogg"])
-    else:
-        voice_note = None
-
-with col2:
-    st.subheader("Structured Output")
-    output_placeholder = st.empty()
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
-if st.button("Run Universal Bridge", type="primary"):
+@app.post("/api/process")
+async def process_input(
+    use_case: str = Form(...),
+    scenario_text: str = Form(""),
+    files: list[UploadFile] = File(default=[]),
+) -> JSONResponse:
     attachments = []
 
-    for uploaded_file in uploaded_files or []:
-        attachments.append(parse_uploaded_file(uploaded_file))
-
-    if voice_note is not None:
-        attachments.append(parse_uploaded_file(voice_note))
-
-    if not scenario_text.strip() and not attachments:
-        st.warning("Please provide at least some text or an uploaded file to analyze.")
-        st.stop()
+    for uploaded_file in files:
+        if uploaded_file.filename:
+            attachments.append(make_attachment(uploaded_file))
 
     try:
         result = summarize_with_gemini(use_case, scenario_text, attachments)
-        output_placeholder.json(result)
-        st.success("Universal Bridge finished processing the input.")
+        return JSONResponse(content=result)
     except Exception as exc:
-        st.error(f"Processing failed: {exc}")
-
-
-st.markdown("---")
-st.subheader("Example use cases")
-st.markdown(
-    """
-    1. Emergency medical triage: combine a voice note, scanned medication list, and symptoms.
-    2. Disaster relief: merge weather alerts, news summaries, and photos of blocked roads.
-    3. Real-time assistance: transform unstructured records into a verified dispatch payload.
-    """
-)
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
