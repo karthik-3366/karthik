@@ -7,6 +7,7 @@ from typing import Any
 
 import streamlit as st
 from dotenv import load_dotenv
+from fastapi import FastAPI
 from PIL import Image
 
 try:
@@ -19,6 +20,17 @@ else:
 
 
 load_dotenv()
+
+app = FastAPI(title="Universal Bridge")
+
+
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "message": "Universal Bridge is ready. Use the Streamlit UI locally or call the API endpoint for integration.",
+    }
+
 
 st.set_page_config(page_title="Universal Bridge", page_icon="🌉", layout="wide")
 
